@@ -1,0 +1,408 @@
+// Creator: Charles Fayal
+// plenty of room for improvement in the following areas:
+// during attach detach delays do something
+// create a more efficient sort
+// create a more efficient printing algorithm 
+
+#include <Servo.h>
+#include <SoftwareSerial.h>
+
+
+// servo has a min of 0 degrees and a max of 140
+
+typedef struct  {
+  int x;
+  int y;
+} dataPoint;
+
+//pins
+const int trigPin = 9;  
+const int echoPin = 8;
+const int servoPin = 10;
+
+int bluetoothTx = 2;
+int bluetoothRx = 3;
+Servo myservo; // servo object
+SoftwareSerial bluetooth(bluetoothTx, bluetoothRx);
+
+// Constant Variables
+
+
+const int MAX_ANGLE = 70;
+const int MIN_ANGLE = -70;
+const int REL_MID_ANGLE = 70; //relative to what arduino 
+const int ATTACH_DELAY = 50;
+const int DETACH_DELAY = 5;
+const int MIN_X = -700;
+const int MAX_X = 700;
+const int MAX_Y = 700;
+const int MIN_Y = -700;
+const int MAX_DIST = 580; // max distance for the ultrasound
+const int RESOLUTION = 4; // angle resolution, lower makes motion slower
+const int DIST_RESOLUTION = 10; // resolution with which it is printed, lower makes printing slower
+const int numberData = ((MAX_ANGLE- MIN_ANGLE)/ RESOLUTION) + 1;
+
+//data array
+dataPoint data[numberData]; // plus 10 in case
+
+void initRangeFinder(void){
+  pinMode(trigPin , OUTPUT);
+  pinMode(echoPin, INPUT);
+}
+void initServo(void){
+   myservo.attach(servoPin); 
+}
+void initBluetooth(void){
+   bluetooth.begin(115200); 
+    bluetooth.print("$");
+    bluetooth.print("$");
+   bluetooth.print("$");
+   delay(100);
+   bluetooth.println("U,9600,N");
+   bluetooth.begin(9600);
+}
+
+//global variables
+ int step = RESOLUTION;
+ int index = 0;
+ bool didFullCycle = false;
+int angle = 0;
+
+void setup() {
+  // run initializations:
+  Serial.begin(9600);
+  initRangeFinder();
+  initServo(); 
+  initBluetooth();
+   
+   setRelServoAngle(0);
+  delay(4000); // time to adjust servo head 
+  angle = MIN_ANGLE;
+  Serial.print("Number of data points: ");
+  Serial.println(numberData);
+  clearData();
+}
+
+void loop(){
+  
+  
+ //variables
+ //MARK: Functions start
+ 
+ //checkBluetooth();
+ String command = "";
+ if(bluetooth.available()){
+    command = (String)bluetooth.readString();
+    Serial.print(command);
+    Serial.println("next");
+    if (command.equals("sweep")){
+      Serial.print("sweeping yo");
+      sweep();
+    }
+ }
+}
+
+
+void sweep(){
+    long cm, inches, duration;
+  while(!didFullCycle){
+     //Functions to for getting a sonar distance reading
+      adjustServoAngle();
+      duration = findRange();
+      cm = microsecondsToCentimeters(duration);
+     if(cm > MAX_DIST){ 
+       //Serial.print("hit max at value: ");
+       //Serial.println(cm);
+        cm = 0;
+     }
+       updateData(cm,angle); //updates the data array
+       angle += step; // changes angle
+      
+    // below checks if the angle is at min or max. if so it changes the step a
+     if(angle > MAX_ANGLE){
+      step = -RESOLUTION;
+      didFullCycle = true;
+    }
+    if( angle < MIN_ANGLE){
+      step = RESOLUTION;
+      didFullCycle = true;
+    }
+  }
+      // after a full swing cycle 
+  if(didFullCycle){
+    sortData();
+    printDataVisualBluetooth();
+    clearData();
+    didFullCycle = false;
+    index = 0;
+  
+  }
+  
+  updateData(cm,angle); //updates the data array
+}
+//MARK: servo functions
+void adjustServoAngle(void){
+   myservo.attach(servoPin);
+  delay(ATTACH_DELAY); 
+  bluetooth.print("Angle: ");
+  bluetooth.print(angle);
+  setRelServoAngle(angle);
+  myservo.detach(); // have to detach or you receive interferance with the servo
+   delay(DETACH_DELAY);
+   
+}
+long findRange(void){
+ pinMode(trigPin, OUTPUT);
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(5);
+  digitalWrite(trigPin, LOW);
+  long duration = pulseIn(echoPin, HIGH);
+  return duration;
+}
+void setRelServoAngle(int relAngle){
+  // relative angleition has looking forwards as 0 degrees 
+  int servoAngle = relAngle + REL_MID_ANGLE;
+  myservo.write(servoAngle);
+}
+int getRelServoAnglen(){
+  // goes from 0-140 scale to -70 to 70 where 0 is straight forwards
+  int readAngle = myservo.read();
+  int realAngle = readAngle - REL_MID_ANGLE; 
+  return realAngle;
+}
+
+//MARK: Bluetooth Functions
+void checkBluetooth(){
+    if(bluetooth.available())
+  {
+    Serial.print((char)bluetooth.read());
+  }
+  
+  if(Serial.available())
+  {
+    bluetooth.print((char)Serial.read());
+  }
+}
+
+//Printing functions
+void printDataPointBluetooth(int x,int y,int cm,int index){
+   bluetooth.print(" Original dist: ");
+   bluetooth.print(cm);
+  bluetooth.print(" x: ");
+  bluetooth.print(x);
+  bluetooth.print(" y: ");
+  bluetooth.print(y);
+  
+  bluetooth.print(" Index: ");
+  bluetooth.println(index);
+}
+void printDataPoint(int x,int y,int cm,int index){
+  Serial.print(" Original dist: ");
+   Serial.print(cm);
+  Serial.print(" x: ");
+  Serial.print(x);
+  Serial.print(" y: ");
+  Serial.print(y);
+  
+  Serial.print(" Index: ");
+  Serial.println(index);
+}
+
+void printDataVisualBluetooth(){
+    int xMax = 0; 
+    int yMax = 0;
+    int xMin = 0;
+    for(int k = 0; k < numberData; k++){
+      data[k].x = (data[k].x / DIST_RESOLUTION);
+      data[k].y = (data[k].y / DIST_RESOLUTION);
+      if(data[k].x > xMax){
+        xMax = data[k].x;
+      }
+      if(data[k].x < xMin){
+        xMin = data[k].x;
+      }
+      if(data[k].y > yMax){
+        yMax = data[k].y;
+      }
+ 
+    }
+  
+    int spotVal = 0;
+    bluetooth.print("D(cm)");
+    for(int x = xMin ; x < xMax; x ++){
+      bluetooth.print(" ");
+      bluetooth.print("-");
+      bluetooth.print(" ");
+    }
+    bluetooth.println();
+    for(int y = 0; y < yMax; y++){
+      bluetooth.print(y * DIST_RESOLUTION);
+      if(y * DIST_RESOLUTION < 10) {
+        bluetooth.print("  ");
+      } else if( y * DIST_RESOLUTION < 100) {
+        bluetooth.print(" ");
+      }
+      bluetooth.print("|");
+
+      for(int x = xMin; x < xMax; x ++){
+        
+        for(int i = 0; i <= index ; i++){
+          if(data[i].y == y && data[i].x == x){
+              spotVal ++;
+            } 
+          }
+        if(spotVal > 0){ 
+          bluetooth.print(" ");
+          bluetooth.print(spotVal);
+          bluetooth.print(" ");
+        }
+        else if( x  == 0) {
+          bluetooth.print(" | ");
+        }else{
+          bluetooth.print("   ");
+        }
+        spotVal = 0;
+      }
+      bluetooth.println("|");
+    }
+    for(int x = xMin ; x < xMax; x ++){
+      bluetooth.print(" ");
+      bluetooth.print("-");
+      bluetooth.print(" ");
+    }
+    bluetooth.println();
+}
+void printDataVisual(){
+   int xMax = 0; 
+    int yMax = 0;
+    int xMin = 0;
+    for(int k = 0; k < numberData; k++){
+      data[k].x = (data[k].x / DIST_RESOLUTION);
+      data[k].y = (data[k].y / DIST_RESOLUTION);
+      if(data[k].x > xMax){
+        xMax = data[k].x;
+      }
+      if(data[k].x < xMin){
+        xMin = data[k].x;
+      }
+      if(data[k].y > yMax){
+        yMax = data[k].y;
+      }
+     
+      Serial.print("x: ");
+      Serial.print(data[k].x);
+      Serial.print(" y: ");
+      Serial.println(data[k].y);
+    }
+    Serial.print("Max x: ");
+    Serial.print(xMax);
+    Serial.print(" Min x: ");
+    Serial.print(xMin);
+    Serial.print(" Max y: ");
+    Serial.println(yMax);
+    int spotVal = 0;
+    Serial.print("D(cm)");
+    for(int x = xMin ; x < xMax; x ++){
+      Serial.print(" ");
+      Serial.print("-");
+      Serial.print(" ");
+    }
+    Serial.println();
+    for(int y = 0; y < yMax; y++){
+      Serial.print(y * DIST_RESOLUTION);
+      if(y * DIST_RESOLUTION < 10) {
+        Serial.print("  ");
+      } else if( y * DIST_RESOLUTION < 100) {
+        Serial.print(" ");
+      }
+      Serial.print("|");
+
+      for(int x = xMin; x < xMax; x ++){
+        
+        for(int i = 0; i <= index ; i++){
+          if(data[i].y == y && data[i].x == x){
+              spotVal ++;
+            } 
+          }
+        if(spotVal > 0){ 
+          Serial.print(" ");
+          Serial.print(spotVal);
+          Serial.print(" ");
+        }
+        else if( x  == 0) {
+          Serial.print(" | ");
+        }else{
+          Serial.print("   ");
+        }
+        spotVal = 0;
+      }
+      Serial.println("|");
+    }
+    for(int x = xMin ; x < xMax; x ++){
+      Serial.print(" ");
+      Serial.print("-");
+      Serial.print(" ");
+    }
+    Serial.println();
+}
+//MARK: data functions
+// updates the data array
+void updateData(int cm, int angle){
+  int x;
+  int y;
+     x = sin(angle * PI / 180) * cm; 
+   y = cos(angle * PI / 180) * cm;
+   printDataPointBluetooth(x,y,cm,index);
+   //printDataPoint(x,y,cm,index);
+  index ++;
+  if( index > 0 && index < numberData){
+    if(x < MAX_X && x > MIN_X){
+      data[ index ].x = x;
+    } 
+    if(y > MIN_Y && y < MAX_Y){
+      data[ index ].y = y;
+    }
+  }
+}
+//clears the data array
+void clearData(){
+  for(int i = 0 ; i < numberData; i ++){
+    data[i].x = 0;
+    data[i].y = 0;
+  }
+}
+//bubble sorts the data
+void sortData(){
+  bool unsorted = true;
+  dataPoint temp; 
+    for(int j = 0; j < numberData - 1; j ++){
+      for(int i = 0; i < numberData - 1; i++){
+         if(data[i].y > data[i +1].y) {
+          temp = data[i];
+          data[i] = data[i+1];
+          data[i+1] = temp;
+         
+      }
+    }
+  }
+}
+
+long microsecondsToInches(long microseconds)
+{
+  // According to Parallax's datasheet for the PING))), there are
+  // 73.746 microseconds per inch (i.e. sound travels at 1130 feet per
+  // second).  This gives the distance travelled by the ping, outbound
+  // and return, so we divide by 2 to get the distance of the obstacle.
+  // See: http://www.parallax.com/dl/docs/prod/acc/28015-PING-v1.3.pdf
+  return microseconds / 74 / 2;
+}
+
+long microsecondsToCentimeters(long microseconds)
+{
+  // The speed of sound is 340 m/s or 29 microseconds per centimeter.
+  // The ping travels out and back, so to find the distance of the
+  // object we take half of the distance travelled.
+  return microseconds / 29 / 2;
+}
